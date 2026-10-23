@@ -23,6 +23,11 @@ const b2 = -0.644363170684469
 const H = 1 + b1 + b2 / γ
 # Provisional tolerance for values that pass through Newton.
 close_to(x, e) = abs(x - e) <= 64 * eps(Float64) * abs(e)
+# Tableau coefficients are computed expressions (b2 differs from its decimal
+# literal in the last bit): within 2e-15 absolute, sign exact.
+coeffs_match(c, e) =
+    length(c) == length(e) &&
+    all(abs(x - y) <= 2e-15 && sign(x) == sign(y) for (x, y) in zip(c, e))
 
 function make_prob(; u0 = [0.0], kwargs...)
     FT = eltype(u0)
@@ -201,8 +206,8 @@ end
     T_exp, T_imp, b_exp, b_imp, dt = d[:T_exp], d[:T_imp], d[:b_exp], d[:b_imp], d[:dt]
     @test dt == 1
     @test all(j -> T_exp[j][1] == 1, 1:4)
-    @test collect(b_exp.coeffs) == [0, b1, b2, γ]
-    @test collect(b_imp.coeffs) == [0, b1, b2, γ]
+    @test coeffs_match(b_exp.coeffs, [0, b1, b2, γ])
+    @test coeffs_match(b_imp.coeffs, [0, b1, b2, γ])
     @test all(map(close_to, [T_imp[j][1] for j in 2:4], [1, 1 / γ, H / γ]))
     @test close_to(sum(j -> b_exp.coeffs[j] * T_exp[j][1], 1:4), 1.0)
     @test close_to(sum(j -> b_imp.coeffs[j] * T_imp[j][1], 2:4), 2H - 1)
