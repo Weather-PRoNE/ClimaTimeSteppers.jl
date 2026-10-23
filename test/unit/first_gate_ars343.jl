@@ -27,7 +27,7 @@ const H = (a41 + 2α) + b1 + b2 / γ
 const u1_expected = 2H
 provisional_tol(x) = 64 * eps(Float64) * abs(x)  # provisional, uncalibrated (D006)
 
-function manufactured_endpoint(alg)
+function manufactured_endpoint(alg; T_exp! = (du, u, p, t) -> (du .= 1))
     # W = dtγ * J - I with J = 1 / (2γ)
     Wfact!(W, u, p, dtγ, t) = (W[1, 1] = dtγ / (2γ) - 1)
     T_imp = CTS.ODEFunction(
@@ -35,7 +35,7 @@ function manufactured_endpoint(alg)
         jac_prototype = zeros(1, 1),
         Wfact = Wfact!,
     )
-    f = ClimaODEFunction(; T_exp! = (du, u, p, t) -> (du .= 1), T_imp! = T_imp)
+    f = ClimaODEFunction(; T_exp!, T_imp! = T_imp)
     prob = CTS.ODEProblem(f, [0.0], (0.0, 1.0), nothing)
     sol = CTS.solve(prob, alg; dt = 1.0, saveat = (1.0,))
     return sol.u[end][1]
@@ -123,6 +123,64 @@ end
                   provisional_tol(u1_expected + shift)
             # ... and therefore fails the golden comparison.
             @test abs(u1_faulty - u1_expected) > provisional_tol(u1_expected)
+        end
+    end
+
+    # B001 C2 case (test 3): f_exp(u, t) = t, f_imp(u, t) = u / (2γ), u0 = 0,
+    # one step with dt = 1. Unlike f_exp ≡ 1, the endpoint depends on a31 and
+    # a32 individually, not only on their sum c3.
+    @testset "C2 time-dependent explicit problem" begin
+        # Independent expression for a32 (hand-derived, not taken from src)
+        p = α * (-15 / 4 + 15γ - (21 / 4) * γ^2) + 4 - (25 / 2) * γ + (9 / 2) * γ^2
+        c3 = (1 + γ) / 2
+        J = b1 * γ + b2 * c3 + γ  # explicit final contribution
+        u1_c2 = J + α * (γ + c3) + 2b2 * p
+        U3_c2 = 2γ * p
+        U4_c2 = 2 * (α * (γ + c3) + b2 * p)
+        swap_shift = 2b2 * (c3 - 2p)
+        tol = provisional_tol(u1_c2)  # provisional, uncalibrated (D006)
+
+        newtons_method = NewtonsMethod(; max_iters = 2)
+        T_exp_t! = (du, u, p, t) -> (du .= t)
+        endpoint(tab; kwargs...) =
+            manufactured_endpoint(IMEXAlgorithm(tab, newtons_method); kwargs...)
+        swap!(c) = (c.a_exp[3, 1], c.a_exp[3, 2]) = (c.a_exp[3, 2], c.a_exp[3, 1])
+
+        @testset "a31, a32 against independent expression" begin
+            a_exp = dense(IMEXTableau(ARS343()).a_exp)
+            @test abs(a_exp[3, 2] - p) <= coeff_atol
+            @test abs(a_exp[3, 1] - (c3 - p)) <= coeff_atol
+        end
+
+        @testset "Endpoint" begin
+            # Stage values observed through the explicit tendency, which is
+            # called with each stage value and stage time.
+            calls = Tuple{Float64, Float64}[]
+            T_exp_rec! = (du, u, p, t) -> (push!(calls, (t, u[1])); du .= t)
+            u1 = endpoint(ARS343(); T_exp! = T_exp_rec!)
+            @test abs(u1 - u1_c2) <= tol  # provisional (D006)
+            # Display-precision guard against the 8-digit hand value
+            @test abs(u1 - 0.62679059) <= 1e-8
+
+            # Stage times come from row sums, so match them to c3 and 1 within
+            # coefficient tolerance rather than exactly.
+            U3_obs = [u for (t, u) in calls if abs(t - c3) <= coeff_atol]
+            U4_obs = [u for (t, u) in calls if abs(t - 1) <= coeff_atol]
+            @test !isempty(U3_obs) && all(u -> abs(u - U3_c2) <= provisional_tol(U3_c2), U3_obs)
+            @test !isempty(U4_obs) && all(u -> abs(u - U4_c2) <= provisional_tol(U4_c2), U4_obs)
+        end
+
+        @testset "Swap control: a_exp[3, 1] <-> a_exp[3, 2]" begin
+            u1_golden = endpoint(ars343_copy(); T_exp! = T_exp_t!)
+            u1_swap = endpoint(ars343_copy(swap!); T_exp! = T_exp_t!)
+            @test abs(u1_golden - u1_c2) <= tol
+            @test abs((u1_swap - u1_golden) - swap_shift) <= tol
+            @test !isapprox(u1_swap, u1_c2; atol = tol)
+
+            # The same swap leaves the f_exp ≡ 1 endpoint unchanged.
+            u1_const = endpoint(ars343_copy())
+            u1_const_swap = endpoint(ars343_copy(swap!))
+            @test abs(u1_const_swap - u1_const) < provisional_tol(u1_expected)
         end
     end
 end
