@@ -197,7 +197,8 @@ end
     @test all(r -> r.data[:dtγ] == γ, effective)
 
     assembly = only(events(log, :AssemblyInputs))
-    (; T_exp, T_imp, b_exp, b_imp, dt) = assembly.data
+    d = assembly.data
+    T_exp, T_imp, b_exp, b_imp, dt = d[:T_exp], d[:T_imp], d[:b_exp], d[:b_imp], d[:dt]
     @test dt == 1
     @test all(j -> T_exp[j][1] == 1, 1:4)
     @test collect(b_exp.coeffs) == [0, b1, b2, γ]
