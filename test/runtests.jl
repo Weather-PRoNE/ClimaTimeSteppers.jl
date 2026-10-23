@@ -48,6 +48,10 @@ end
     include("unit/post_imp.jl")
 end
 
+@safetestset "Solver events" begin
+    include("unit/solver_events.jl")
+end
+
 @safetestset "Edge cases" begin
     include("unit/edge_cases.jl")
 end
