@@ -41,6 +41,19 @@ function manufactured_endpoint(alg; T_exp! = (du, u, p, t) -> (du .= 1))
     return sol.u[end][1]
 end
 
+# Stage recorder: the explicit tendency is called with each stage value and its
+# explicit stage time t + dt * c_exp[i], so the recorded (t, u) pairs expose the
+# stage values. Returns the record and a T_exp! computing du = f_exp(t).
+function stage_recorder(f_exp)
+    calls = Tuple{Float64, Float64}[]
+    T_exp! = (du, u, p, t) -> (push!(calls, (t, u[1])); du .= f_exp(t))
+    return calls, T_exp!
+end
+
+# Stage times come from row sums, so match them to c within coefficient
+# tolerance rather than exactly.
+stage_values(calls, c) = [u for (t, u) in calls if abs(t - c) <= coeff_atol]
+
 # Harness copy of the ARS343 tableau, built through the public keyword
 # constructor; `modify!` may change entries of the copied coefficient arrays.
 # c_exp and c_imp default to the row sums of the (modified) matrices.
@@ -106,7 +119,9 @@ end
     # harness copy of the tableau shifts the endpoint by a predicted amount.
     @testset "Negative controls" begin
         newtons_method = NewtonsMethod(; max_iters = 2)
-        endpoint(tab) = manufactured_endpoint(IMEXAlgorithm(tab, newtons_method))
+        endpoint(tab; kwargs...) =
+            manufactured_endpoint(IMEXAlgorithm(tab, newtons_method); kwargs...)
+        flip_a41!(c) = (c.a_exp[4, 1] *= -1)
 
         # The unmodified harness copy reproduces the golden endpoint.
         @test abs(endpoint(ars343_copy()) - u1_expected) <= provisional_tol(u1_expected)
@@ -114,7 +129,7 @@ end
         controls = (
             ("b_imp[3] flipped", c -> (c.b_imp[3] *= -1), -2b2 / γ),
             ("b_exp[3] flipped", c -> (c.b_exp[3] *= -1), -2b2),
-            ("a_exp[4, 1] flipped", c -> (c.a_exp[4, 1] *= -1), -2a41),
+            ("a_exp[4, 1] flipped", flip_a41!, -2a41),
         )
         @testset "$name" for (name, flip!, shift) in controls
             u1_faulty = endpoint(ars343_copy(flip!))
@@ -123,6 +138,24 @@ end
                   provisional_tol(u1_expected + shift)
             # ... and therefore fails the golden comparison.
             @test abs(u1_faulty - u1_expected) > provisional_tol(u1_expected)
+        end
+
+        # Stage level: the a41 flip moves the explicit stage time
+        # c4 = a41 + 2α = 1 to 1 - 2a41 and the stage value U4 = 2H by -4a41,
+        # so the golden-stage comparison fails as well.
+        @testset "a_exp[4, 1] flipped: stage U4" begin
+            tol4 = provisional_tol(2H)
+            calls_golden, T_exp_golden! = stage_recorder(Returns(1.0))
+            calls_fault, T_exp_fault! = stage_recorder(Returns(1.0))
+            endpoint(ars343_copy(); T_exp! = T_exp_golden!)
+            endpoint(ars343_copy(flip_a41!); T_exp! = T_exp_fault!)
+            U4_golden = stage_values(calls_golden, 1)
+            U4_fault = stage_values(calls_fault, 1 - 2a41)
+            @test !isempty(U4_golden) && all(u -> abs(u - 2H) <= tol4, U4_golden)
+            @test !isempty(U4_fault) &&
+                  all(u -> abs((u - 2H) - (-4a41)) <= tol4, U4_fault)
+            @test !isempty(U4_fault) &&
+                  all(u -> !isapprox(u, 2H; atol = tol4), U4_fault)
         end
     end
 
@@ -141,7 +174,6 @@ end
         tol = provisional_tol(u1_c2)  # provisional, uncalibrated (D006)
 
         newtons_method = NewtonsMethod(; max_iters = 2)
-        T_exp_t! = (du, u, p, t) -> (du .= t)
         endpoint(tab; kwargs...) =
             manufactured_endpoint(IMEXAlgorithm(tab, newtons_method); kwargs...)
         swap!(c) = (c.a_exp[3, 1], c.a_exp[3, 2]) = (c.a_exp[3, 2], c.a_exp[3, 1])
@@ -153,29 +185,40 @@ end
         end
 
         @testset "Endpoint" begin
-            # Stage values observed through the explicit tendency, which is
-            # called with each stage value and stage time.
-            calls = Tuple{Float64, Float64}[]
-            T_exp_rec! = (du, u, p, t) -> (push!(calls, (t, u[1])); du .= t)
+            # Stage values observed through the explicit tendency
+            calls, T_exp_rec! = stage_recorder(t -> t)
             u1 = endpoint(ARS343(); T_exp! = T_exp_rec!)
             @test abs(u1 - u1_c2) <= tol  # provisional (D006)
             # Display-precision guard against the 8-digit hand value
             @test abs(u1 - 0.62679059) <= 1e-8
 
-            # Stage times come from row sums, so match them to c3 and 1 within
-            # coefficient tolerance rather than exactly.
-            U3_obs = [u for (t, u) in calls if abs(t - c3) <= coeff_atol]
-            U4_obs = [u for (t, u) in calls if abs(t - 1) <= coeff_atol]
-            @test !isempty(U3_obs) && all(u -> abs(u - U3_c2) <= provisional_tol(U3_c2), U3_obs)
-            @test !isempty(U4_obs) && all(u -> abs(u - U4_c2) <= provisional_tol(U4_c2), U4_obs)
+            U3_obs = stage_values(calls, c3)
+            U4_obs = stage_values(calls, 1)
+            @test !isempty(U3_obs) &&
+                  all(u -> abs(u - U3_c2) <= provisional_tol(U3_c2), U3_obs)
+            @test !isempty(U4_obs) &&
+                  all(u -> abs(u - U4_c2) <= provisional_tol(U4_c2), U4_obs)
         end
 
         @testset "Swap control: a_exp[3, 1] <-> a_exp[3, 2]" begin
-            u1_golden = endpoint(ars343_copy(); T_exp! = T_exp_t!)
-            u1_swap = endpoint(ars343_copy(swap!); T_exp! = T_exp_t!)
+            calls_golden, T_exp_golden! = stage_recorder(t -> t)
+            calls_swap, T_exp_swap! = stage_recorder(t -> t)
+            u1_golden = endpoint(ars343_copy(); T_exp! = T_exp_golden!)
+            u1_swap = endpoint(ars343_copy(swap!); T_exp! = T_exp_swap!)
             @test abs(u1_golden - u1_c2) <= tol
             @test abs((u1_swap - u1_golden) - swap_shift) <= tol
             @test !isapprox(u1_swap, u1_c2; atol = tol)
+
+            # Stage level: the swap keeps c3 = a31 + a32, so U3 is still
+            # recorded at c3, moves by 2γ(c3 - 2p) and fails the golden U3.
+            tol3 = provisional_tol(U3_c2)
+            U3_golden = stage_values(calls_golden, c3)
+            U3_swap = stage_values(calls_swap, c3)
+            @test !isempty(U3_golden) && all(u -> abs(u - U3_c2) <= tol3, U3_golden)
+            @test !isempty(U3_swap) &&
+                  all(u -> abs((u - U3_c2) - 2γ * (c3 - 2p)) <= tol3, U3_swap)
+            @test !isempty(U3_swap) &&
+                  all(u -> !isapprox(u, U3_c2; atol = tol3), U3_swap)
 
             # The same swap leaves the f_exp ≡ 1 endpoint unchanged.
             u1_const = endpoint(ars343_copy())
