@@ -16,6 +16,10 @@ end
     include("unit/tableaus.jl")
 end
 
+@safetestset "First-gate ARS343 coefficients and assembly" begin
+    include("unit/first_gate_ars343.jl")
+end
+
 @safetestset "UpdateSignalHandler" begin
     include("unit/update_signal_handler.jl")
 end
