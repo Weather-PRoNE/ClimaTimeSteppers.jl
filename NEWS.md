@@ -13,7 +13,10 @@ main
   caches, payloads are valid only until the observer returns, and consumers
   copy what they keep (`temp` and `U` are reused scratch). Without an observer
   (the default `nothing`) no event is constructed and results are unchanged.
-  Other algorithms throw an `ArgumentError` when given a `solver_observer`.
+  Passing a non-`nothing` `solver_observer` to an algorithm outside
+  `IMEXAlgorithm{Unconstrained}` (SSP-constrained, Rosenbrock, multirate)
+  throws an `ArgumentError`; explicit tableaux with the default constraint are
+  supported; `solver_observer = nothing` is always accepted.
 
 v1.0.1
 -------

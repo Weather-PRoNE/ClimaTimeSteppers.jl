@@ -250,8 +250,12 @@ end
     @test checked.violations == [:StageBaseline, :StageBaseline, :StageBaseline]
 end
 
-cache_arrays(c) =
-    [c.U, c.temp, parent(c.T_exp)..., parent(c.T_lim)..., parent(c.T_imp)...]
+newton_arrays(nmc::Nothing) = AbstractArray[]
+newton_arrays(nmc) = AbstractArray[getfield(nmc, k) for k in propertynames(nmc) if getfield(nmc, k) isa AbstractArray]
+cache_arrays(c) = [
+    c.U, c.temp, parent(c.T_exp)..., parent(c.T_lim)..., parent(c.T_imp)...,
+    newton_arrays(c.newtons_method_cache)...,
+]
 function warm_step_allocations(; kwargs...)
     integrator = CTS.init(make_prob(), make_alg(); dt = 1.0, kwargs...)
     CTS.step!(integrator)
@@ -271,6 +275,10 @@ end
         @test same_bits(integrator.u, reference.u)
         @test all(map(same_bits, cache_arrays(integrator.cache), cache_arrays(reference.cache)))
     end
+    @test length(newton_arrays(reference.cache.newtons_method_cache)) == 3  # Δx, f, j
+    perturbed = one_step()
+    perturbed.cache.newtons_method_cache.Δx[1] += 1
+    @test !all(map(same_bits, cache_arrays(perturbed.cache), cache_arrays(reference.cache)))
     @test reference.cache.solver_observer === nothing
     @test runs[2].cache.solver_observer === nothing
 
@@ -372,4 +380,26 @@ end
         CTS.step!(integrator)
         @test isfinite(integrator.u[1]) && integrator.t == 1
     end
+end
+
+@testset "explicit-only ARK (RK4) is supported and traced" begin
+    prob = ODEProblem(ClimaODEFunction(; T_exp! = (du, u, p, t) -> (du .= 1)), [0.0], (0.0, 10.0), nothing)
+    rec = Recorder()
+    integrator = CTS.init(prob, ExplicitAlgorithm(RK4()); dt = 1.0, solver_observer = rec)
+    CTS.step!(integrator)
+    @test close_to(integrator.u[1], 1.0)
+    log = rec.log
+    @test length(events(log, :StepStart)) == 1
+    @test length(events(log, :AssemblyInputs)) == 1
+    @test isempty(events(log, :StageBaseline))
+    @test isempty(events(log, :EffectiveStorage))
+    sites = [r.data[:site] for r in log if r.kind === :Operation && r.data[:phase] === :entry]
+    # no implicit stage: per stage i ≠ 1 the pre-DSS and, with the default
+    # UpdateEvery(EndOfStage) cache policy, the no-implicit cache site; then the final maps
+    @test count(==(:stage_dss_pre), sites) == 3
+    @test count(==(:stage_cache_no_implicit), sites) == 3
+    @test count(==(:final_dss), sites) == 1
+    @test count(==(:final_constrain), sites) == 1
+    @test count(==(:final_cache), sites) == 1
+    @test isempty(filter(s -> s in (:init_imp, :cache_imp_pre_newton, :cache_imp_newton, :cache_imp_post_newton, :post_imp_correction, :stage_dss_post, :stage_cache_fallback, :stage_lim, :final_lim), sites))
 end

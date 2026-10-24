@@ -170,6 +170,12 @@ Create a [`TimeStepperIntegrator`](@ref) for the given problem and algorithm.
   integrator of a multirate method) to avoid per-step saving allocations
 - `dtchangeable`: allow dt reduction near tstops (default: `true`)
 - `stepstop`: stop after this many steps (`-1` = unlimited)
+- `solver_observer`: callable receiving the labelled solver events of IMEX ARK
+  (`StepStart`, `StageBaseline`, `EffectiveStorage`, `AssemblyInputs`,
+  `Operation`; payloads borrowed until return); supported for
+  `IMEXAlgorithm{Unconstrained}` (incl. explicit tableaux with the default
+  constraint); a non-`nothing` value for other algorithms throws an
+  `ArgumentError` (default: `nothing`, no events constructed)
 
 # Returns
 - a [`TimeStepperIntegrator`](@ref)
