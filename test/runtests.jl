@@ -19,6 +19,9 @@ end
 @safetestset "First-gate ARS343 coefficients and assembly" begin
     include("unit/first_gate_ars343.jl")
 end
+@safetestset "First-gate limiter and final maps" begin
+    include("unit/first_gate_limiter_maps.jl")
+end
 
 @safetestset "UpdateSignalHandler" begin
     include("unit/update_signal_handler.jl")
