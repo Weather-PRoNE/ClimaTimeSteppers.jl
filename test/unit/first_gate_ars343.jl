@@ -91,6 +91,36 @@ end
         @test b_exp[2] + b_exp[3] + b_exp[4] ≈ 1 atol = coeff_atol
     end
 
+    # γ is the middle root of 6γ³ - 18γ² + 9γ - 1 = 0 (roots ≈ 0.159, 0.436,
+    # 2.405), checked independently of the 16-digit literal it is compared to
+    # in src.
+    @testset "γ is the middle root of the ARS343 cubic" begin
+        p(x) = ((6x - 18) * x + 9) * x - 1
+        function bisect(lo, hi)
+            for _ in 1:200
+                mid = (lo + hi) / 2
+                (mid == lo || mid == hi) && break
+                sign(p(mid)) == sign(p(lo)) ? (lo = mid) : (hi = mid)
+            end
+            return (lo + hi) / 2
+        end
+        # Sign changes on three brackets give all three real roots.
+        brackets = ((0.0, 0.3), (0.3, 1.0), (1.0, 3.0))
+        @test all(((lo, hi),) -> sign(p(lo)) != sign(p(hi)), brackets)
+        r1, r2, r3 = map(b -> bisect(b...), brackets)
+        # k·eps rationale: Horner takes 5 rounded operations with intermediates
+        # below 16 in magnitude (6γ - 18 ≈ -15.4), so each error is at most
+        # eps(8) / 2 = 2 eps(4) / 2 before later factors |γ| < 1 damp it; the
+        # 16-digit literal adds <= 5e-17 |p'(γ)| ≈ 1.7e-16 < eps(4). The sum is
+        # below 6 eps(4); 16 eps(4) ≈ 1.4e-14 covers it with margin.
+        tol_cubic = 16 * eps(4.0)
+        @test abs(p(γ)) <= tol_cubic
+        # |p'(γ)| ≈ 3.3 > 1, so the root error is below the residual bound.
+        @test abs(γ - r2) <= tol_cubic
+        @test r1 < γ < r3
+        @test abs(γ - r1) > 0.2 && abs(γ - r3) > 1.9
+    end
+
     @testset "Manufactured linear implicit problem" begin
         tol = provisional_tol(u1_expected)
         u1 = manufactured_endpoint(IMEXAlgorithm(ARS343(), NewtonsMethod(; max_iters = 2)))
