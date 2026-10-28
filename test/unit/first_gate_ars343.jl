@@ -1,10 +1,7 @@
-#=
-First-gate checks for ARS343 coefficients and one-step assembly (B001 T3).
-
-Expected values are the frozen T0 expectations (B001 `t0-expectations.md`,
-Section 1). They are typed in here or derived from the frozen constants, never
-taken from the solver.
-=#
+# First-gate checks of the ARS343 coefficients and one-step assembly. Expected
+# values are typed in or derived inline, never taken from the solver.
+# White-box: reads tableau entries through the internal `CTS.SparseCoeffs` field
+# `coeffs`.
 using ClimaTimeSteppers, Test, LinearAlgebra
 using StaticArrays
 import ClimaTimeSteppers as CTS
@@ -12,7 +9,7 @@ import ClimaTimeSteppers as CTS
 # Helper to extract dense Float64 arrays from SparseCoeffs (as in tableaus.jl)
 dense(sc::CTS.SparseCoeffs) = Array(Float64.(sc.coeffs))
 
-# Frozen constants (t0-expectations.md Section 1; src/solvers/imex_tableaus.jl:310–338)
+# ARS343 constants (16 significant digits)
 const γ = 0.4358665215084590
 const b1 = 1.208496649176010
 const b2 = -0.644363170684469
@@ -25,7 +22,7 @@ const coeff_atol = 2e-15
 # H = (a41 + 2α) + b1 + b2 / γ.
 const H = (a41 + 2α) + b1 + b2 / γ
 const u1_expected = 2H
-provisional_tol(x) = 64 * eps(Float64) * abs(x)  # provisional, uncalibrated (D006)
+provisional_tol(x) = 64 * eps(Float64) * abs(x)
 
 function manufactured_endpoint(alg; T_exp! = (du, u, p, t) -> (du .= 1))
     # W = dtγ * J - I with J = 1 / (2γ)
@@ -71,7 +68,6 @@ end
 
 @testset "First-gate ARS343" begin
 
-    # t0-expectations.md Section 1, coefficients
     @testset "Coefficients" begin
         tab = IMEXTableau(ARS343())
         a_exp = dense(tab.a_exp)
@@ -102,7 +98,6 @@ end
         @test b_exp[2] + b_exp[3] + b_exp[4] ≈ 1 atol = coeff_atol
     end
 
-    # t0-expectations.md Section 1, manufactured linear implicit problem
     @testset "Manufactured linear implicit problem" begin
         tol = provisional_tol(u1_expected)
         u1 = manufactured_endpoint(IMEXAlgorithm(ARS343(), NewtonsMethod(; max_iters = 2)))
@@ -115,8 +110,7 @@ end
         @test abs(u1_one_iter - u1) <= tol
     end
 
-    # t0-expectations.md Section 1, negative controls: one flipped sign in a
-    # harness copy of the tableau shifts the endpoint by a predicted amount.
+    # Negative controls: one flipped sign in a harness copy of the tableau shifts the endpoint by a predicted amount.
     @testset "Negative controls" begin
         newtons_method = NewtonsMethod(; max_iters = 2)
         endpoint(tab; kwargs...) =
@@ -159,7 +153,7 @@ end
         end
     end
 
-    # B001 C2 case (test 3): f_exp(u, t) = t, f_imp(u, t) = u / (2γ), u0 = 0,
+    # Time-dependent explicit problem: f_exp(u, t) = t, f_imp(u, t) = u / (2γ), u0 = 0,
     # one step with dt = 1. Unlike f_exp ≡ 1, the endpoint depends on a31 and
     # a32 individually, not only on their sum c3.
     @testset "C2 time-dependent explicit problem" begin
@@ -171,7 +165,7 @@ end
         U3_c2 = 2γ * p
         U4_c2 = 2 * (α * (γ + c3) + b2 * p)
         swap_shift = 2b2 * (c3 - 2p)
-        tol = provisional_tol(u1_c2)  # provisional, uncalibrated (D006)
+        tol = provisional_tol(u1_c2)
 
         newtons_method = NewtonsMethod(; max_iters = 2)
         endpoint(tab; kwargs...) =
@@ -188,7 +182,7 @@ end
             # Stage values observed through the explicit tendency
             calls, T_exp_rec! = stage_recorder(t -> t)
             u1 = endpoint(ARS343(); T_exp! = T_exp_rec!)
-            @test abs(u1 - u1_c2) <= tol  # provisional (D006)
+            @test abs(u1 - u1_c2) <= tol
             # Display-precision guard against the 8-digit hand value
             @test abs(u1 - 0.62679059) <= 1e-8
 

@@ -1,15 +1,11 @@
-#=
-First-gate checks for the applied limited channel and the final maps (B001 T4).
-
-Expected values are the frozen T0 expectations (B001 `t0-sections.md`,
-Section 2 "applied limited channel" and Section 5 "final maps and endpoint
-ordering"). They are typed in here, never taken from the solver. The targets
-are exact integers in exact arithmetic; see `tol` for the Float64 bound.
-=#
+# First-gate checks of the applied limited channel and the end-of-step final
+# maps (order and single application). Expected values are exact integers typed
+# in here, never taken from the solver. White-box: identifies the endpoint
+# limiter call by `u === integrator.cache.temp` (`IMEXARKCache` scratch buffer).
 using ClimaTimeSteppers, Test
 import ClimaTimeSteppers as CTS
 
-# Section 2 setup: u0 = 2 U, dt = 1 s, T_lim = 4, T_exp = -2, T_imp = 0,
+# Limited-channel setup: u0 = 2 U, dt = 1 s, T_lim = 4, T_exp = -2, T_imp = 0,
 # L(x) = min(x, 3). Constant tendencies, so stage values cannot change them.
 const u0 = 2.0
 const u_raw = 6.0       # u0 + Σ b_exp T_lim dt = 2 + 4 (Σ b_exp = 1)
@@ -17,7 +13,7 @@ const u_limited = 3.0   # L(u_raw)
 const Y_asm = 1.0       # u_limited + Σ b_exp T_exp dt = 3 - 2
 L(x) = min(x, 3.0)
 
-# Section 5 maps, applied after assembly as M_K ∘ M_C ∘ M_D.
+# Final maps, applied after assembly as M_K ∘ M_C ∘ M_D.
 M_D(x) = 2x + 1
 M_C(x) = min(x, 2.0)
 M_K(x) = x + 4
@@ -44,7 +40,7 @@ function map_hook(name, M, trace, target)
     end
 end
 
-# One ARS343 step of the Section 2 split problem. `lim` is the limiter body,
+# One ARS343 step of the limited-channel split problem. `lim` is the limiter body,
 # `maps` the scalar maps run by (dss!, constrain_state!, cache!).
 function limiter_maps_step(;
     lim = L,
@@ -88,7 +84,6 @@ end
 
 @testset "First-gate limiter and final maps" begin
 
-    # t0-sections.md Section 2 (lines 179-207)
     @testset "Applied limited channel" begin
         (; u1, trace, lim_calls) = limiter_maps_step()
         @test near(u1, Y_asm)
@@ -123,7 +118,7 @@ end
         end
     end
 
-    # t0-sections.md Section 5 (lines 294-328), starting from Y_asm = 1 U
+    # Final maps, starting from Y_asm = 1 U
     @testset "Final maps and ordering" begin
         golden_maps = (M_D, M_C, M_K)
         (; u1, trace) = limiter_maps_step(; maps = golden_maps)
@@ -131,7 +126,7 @@ end
         @test near(u1 - Y_asm, 5.0)  # total final-map change
 
         # Each map acts once, in the order dss!, constrain_state!, cache!, at
-        # t_final, with the before/after trace of Section 5.
+        # t_final, with the before/after trace 1 -> 3 -> 2 -> 6.
         @test [(n, t) for (n, t, _, _) in trace] ==
               [(:dss!, 1.0), (:constrain_state!, 1.0), (:cache!, 1.0)]
         befores = [b for (_, _, b, _) in trace]
@@ -155,7 +150,7 @@ end
         end
 
         @testset "Fault: cache map applied twice" begin
-            # Hand value from the Section 5 maps: 1 -> 3 -> 2 -> 6 -> 10 U.
+            # Hand value from the final maps: 1 -> 3 -> 2 -> 6 -> 10 U.
             # (M_C twice is idempotent and M_D twice is clipped by M_C, so the
             # cache map is the one whose double application is visible.)
             u1_fault = limiter_maps_step(; maps = (M_D, M_C, M_K ∘ M_K)).u1

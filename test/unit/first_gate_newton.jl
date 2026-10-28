@@ -1,39 +1,22 @@
-#=
-First-gate finite-Newton defect check (B001 T5).
-
-Expected values are the frozen T0 expectations (B001 `t0-expectations.md`,
-Section 4): the second ARS343 stage of f_exp = 0, f_imp(u) = -u² / (1 U s),
-u0 = 1 U, h = dt γ = 1/4 s, after one undamped Newton iteration from the
-baseline B = 1 U. They are exact rationals typed in here, never taken from the
-solver. The converged root -2 + 2√2 U is not the expectation.
-
-Solver settings that guarantee "one iteration, guess = baseline, exact
-Jacobian" (revision 731337a):
-- `NewtonsMethod(; max_iters = 1)`: the loop at
-  src/nl_solvers/newtons_method.jl:761 runs once.
-- `convergence_checker = nothing` (default, newtons_method.jl:714):
-  `is_converged!` returns false (src/utilities/convergence_checker.jl:73), so
-  there is no early exit and no extra iteration.
-- `line_search = nothing` (default, newtons_method.jl:716): `line_search!` is a
-  no-op (src/utilities/line_search.jl:29), so the step x -= Δx at
-  newtons_method.jl:798 is undamped.
-- Guess = baseline: the stage value U from `compute_stage_value!` is copied to
-  `temp` (src/solvers/imex_ark.jl:212) and passed as the Newton iterate
-  (imex_ark.jl:224–227); the default `initialize_imp!`, `dss!`,
-  `constrain_state!` and `cache_imp!` are `Returns(nothing)`
-  (src/functions.jl:142–146), so U is unchanged before the solve.
-- Exact Jacobian: `update_j = UpdateEvery(NewNewtonIteration)` (default,
-  newtons_method.jl:712) evaluates `Wfact` at the baseline before the step
-  (newtons_method.jl:763–764). The residual is U₀ + dtγ T(U′) - U′
-  (imex_ark.jl:312), so `Wfact` must return W = dtγ J - I with
-  J = ∂f_imp/∂u = -2u / (1 U s), i.e. W = -(1 + h 2u / (1 U s)).
-- The stored stage tendency is T_imp[2] = (U - temp) / dtγ
-  (imex_ark.jl:284), read from `integrator.cache.T_imp` after the step.
-=#
+# First-gate check of the finite-Newton defect at the second ARS343 stage of
+# f_exp = 0, f_imp(u) = -u² / (1 U s), u0 = 1 U, h = dt γ = 1/4 s, after one
+# undamped Newton iteration from the baseline B = 1 U. Expected values are exact
+# rationals typed in here; the converged root -2 + 2√2 U is not the expectation.
+# White-box: reads the stored stage tendencies `integrator.cache.T_imp`
+# (`IMEXARKCache`), set by `evaluate_stage_tendencies!` to (U - temp) / dtγ.
+#
+# One iteration from the baseline with the exact Jacobian follows from the
+# `NewtonsMethod` defaults in `solve_newton!`: `max_iters = 1`, no
+# `convergence_checker` (no early exit), no `line_search` (undamped step), and
+# `update_j = UpdateEvery(NewNewtonIteration)` (`Wfact` at the iterate).
+# `solve_stage_implicit!` starts from the stage value of `compute_stage_value!`,
+# which the default no-op `initialize_imp!`, `dss!`, `constrain_state!` and
+# `cache_imp!` leave unchanged. The residual is U₀ + dtγ T(U′) - U′, so `Wfact`
+# returns W = dtγ J - I with J = ∂f_imp/∂u = -2u / (1 U s).
 using ClimaTimeSteppers, Test
 import ClimaTimeSteppers as CTS
 
-# Frozen ARS343 constants (t0-expectations.md Section 1)
+# ARS343 constants (16 significant digits)
 const γ = 0.4358665215084590
 const b1 = 1.208496649176010
 const b2 = -0.644363170684469
@@ -45,7 +28,8 @@ f_imp(u) = -u^2
 const u0 = 1.0
 const dt = 1 / (4γ)
 
-# Exact expectations (t0-sections.md Section 4)
+# Exact expectations: one Newton step U = B - R(B) / W(B) with R(B) = h f_imp(B),
+# W(B) = -(1 + 2hB); defect D = U - B - h f_imp(U)
 const B = 1 // 1
 const h = 1 // 4
 const U_expected = 5 // 6
@@ -54,7 +38,7 @@ const D_expected = 1 // 144
 const T_eff_expected = -2 // 3
 const U_converged = -2 + 2√2
 
-# Tolerances (provisional, uncalibrated; D006). States are O(1 U): the Newton
+# Tolerances. States are O(1 U): the Newton
 # step, dt = 1/(4γ) and dtγ each round within a few ulps of their O(1) values,
 # so 64 eps of the state scale |B| = 1 U bounds the state error with margin.
 # Tendencies are state differences divided by h = 1/4 s, which multiplies the
@@ -126,7 +110,7 @@ end
         @test abs((T_eff_obs - T_physical) - 1 // 36) <= tol_tend
 
         # Assembly: with f_exp = 0 the endpoint is u0 + dt Σ b_imp[j] T_imp[j]
-        # (src/solvers/imex_ark.jl:81–91); b_imp[1] = 0. The stored tendencies
+        # (assembly in `step_u!`); b_imp[1] = 0. The stored tendencies
         # reproduce the solver endpoint ...
         tol_u1 = 64 * eps(Float64) * (abs(u0) + dt * sum(abs, b_imp[2:4] .* T_imp_stored))
         u1_assembled = u0 + dt * sum(b_imp[2:4] .* T_imp_stored)
