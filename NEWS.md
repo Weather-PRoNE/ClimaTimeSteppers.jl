@@ -4,6 +4,20 @@ ClimaTimeSteppers.jl Release Notes
 main
 -------
 
+- Labelled solver events for IMEX ARK (`IMEXAlgorithm` with an unconstrained
+  tableau): `init(prob, alg; dt, solver_observer)` calls
+  `solver_observer(event)` with `StepStart`, `StageBaseline`,
+  `EffectiveStorage`, `AssemblyInputs` and `Operation` events, each carrying an
+  `EventContext` (step, step-start `t`, actual `dt`, stage, `dtγ`, stage times).
+  Payloads are borrowed live buffers: observers must not mutate state or
+  caches, payloads are valid only until the observer returns, and consumers
+  copy what they keep (`temp` and `U` are reused scratch). Without an observer
+  (the default `nothing`) no event is constructed and results are unchanged.
+  Passing a non-`nothing` `solver_observer` to an algorithm outside
+  `IMEXAlgorithm{Unconstrained}` (SSP-constrained, Rosenbrock, multirate)
+  throws an `ArgumentError`; explicit tableaux with the default constraint are
+  supported; `solver_observer = nothing` is always accepted.
+
 v1.0.1
 -------
 

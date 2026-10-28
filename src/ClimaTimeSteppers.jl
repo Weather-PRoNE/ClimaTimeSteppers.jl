@@ -217,6 +217,7 @@ include("Callbacks.jl")
 # for the `initialize!`/`finalize!` extension points).
 using .Callbacks
 export EveryXSimulationTime, EveryXSimulationSteps, EveryXWallTimeSeconds
+export EventContext, StepStart, StageBaseline, EffectiveStorage, AssemblyInputs, Operation
 
 benchmark_step(integrator, device = ClimaComms.device()) =
     @warn "BenchmarkTools and CUDA must be loaded to call benchmark_step"

@@ -170,6 +170,12 @@ Create a [`TimeStepperIntegrator`](@ref) for the given problem and algorithm.
   integrator of a multirate method) to avoid per-step saving allocations
 - `dtchangeable`: allow dt reduction near tstops (default: `true`)
 - `stepstop`: stop after this many steps (`-1` = unlimited)
+- `solver_observer`: callable receiving the labelled solver events of IMEX ARK
+  (`StepStart`, `StageBaseline`, `EffectiveStorage`, `AssemblyInputs`,
+  `Operation`; payloads borrowed until return); supported for
+  `IMEXAlgorithm{Unconstrained}` (incl. explicit tableaux with the default
+  constraint); a non-`nothing` value for other algorithms throws an
+  `ArgumentError` (default: `nothing`, no events constructed)
 
 # Returns
 - a [`TimeStepperIntegrator`](@ref)
@@ -204,6 +210,9 @@ function init(
     kwargs...,
 )
     (; u0, p) = prob
+    isnothing(get(kwargs, :solver_observer, nothing)) || supports_solver_events(alg) ||
+        throw(ArgumentError("solver events are implemented for IMEX ARK only; \
+                             `solver_observer` is not supported for $(typeof(alg))"))
     t0, tf = prob.tspan
     t0, tf, dt = promote(t0, tf, dt)
 
@@ -257,6 +266,9 @@ function init(
     initialize_callbacks!(callback, u0, t0, integrator)
     return integrator
 end
+
+# Whether `init(...; solver_observer)` is supported (IMEX ARK, see `EventContext`).
+supports_solver_events(alg) = false
 
 """
     reinit!(integrator, [u0]; t0, tf, erase_sol, tstops, saveat, reinit_callbacks)
