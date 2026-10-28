@@ -90,21 +90,12 @@ end
         @test abs(U - U_converged) > tol_state
     end
 
-    # Negative controls: each faulty requirement fails by more than the
-    # tolerance, by the predicted amount.
-    @testset "Negative controls" begin
-        U = only(U_obs)
-        T_physical = f_imp(U)
-        D = U - B - h * T_physical
-
-        # Requiring zero defect fails by D = 1/144 U.
-        @test !(abs(D - 0) <= tol_state)
-        @test abs(abs(D - 0) - D_expected) <= tol_state
-
-        # Storage replaced by the physical tendency at stage level misses the
-        # stored value by D/h = 1/36 U/s.
-        @test !(abs(T_physical - T_eff_obs) <= tol_tend)
-        @test abs((T_eff_obs - T_physical) - 1 // 36) <= tol_tend
+    # Oracle separation: the solver endpoint is reassembled from the stored
+    # tendencies; a hand-built faulty assembly (no solver run) is separated
+    # from it by the predicted amount. Zero defect and physical-tendency
+    # storage are already excluded by the stage-2 checks above.
+    @testset "Oracle separation" begin
+        T_physical = f_imp(only(U_obs))
 
         # Assembly: with f_exp = 0 the endpoint is u0 + dt Σ b_imp[j] T_imp[j]
         # (assembly in `step_u!`); b_imp[1] = 0. The stored tendencies

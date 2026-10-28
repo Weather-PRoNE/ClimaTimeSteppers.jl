@@ -104,14 +104,16 @@ end
         @test near(after - u_ref, 1.0)       # ΔY_lim,applied
         @test near(u1 - after, -2.0)         # unlimited explicit contribution
 
-        @testset "Fault: limiter skipped" begin
+        # Oracle separation: changed problem inputs (not solver mutations)
+        # move the endpoint away from the oracle by the predicted amount.
+        @testset "Oracle separation: limiter skipped" begin
             # Raw contribution 4 instead of applied 1: endpoint 4 U, residual -3 U.
             u1_fault = limiter_maps_step(; lim = identity).u1
             @test near(u1_fault - Y_asm, 3.0)
             @test abs(u1_fault - Y_asm) > tol
         end
 
-        @testset "Fault: limit after unlimited increments" begin
+        @testset "Oracle separation: limit after unlimited increments" begin
             # Unlimited tendency moved into the limited channel:
             # min(2 + 4 - 2, 3) = 3 U instead of 1 U.
             u1_fault = limiter_maps_step(; T_lim = 4.0 - 2.0, T_exp = 0.0).u1
@@ -137,21 +139,22 @@ end
         @test all(near.(afters, [3.0, 2.0, 6.0]))
         @test all(near.(afters .- befores, [2.0, -1.0, 4.0]))
 
-        @testset "Fault: first two maps swapped" begin
+        # Oracle separation: changed map inputs (not solver mutations).
+        @testset "Oracle separation: first two maps swapped" begin
             # 1 -> 1 -> 3 -> 7 U
             u1_fault = limiter_maps_step(; maps = (M_C, M_D, M_K)).u1
             @test near(u1_fault - Y_next, 1.0)
             @test abs(u1_fault - Y_next) > tol
         end
 
-        @testset "Fault: cache map omitted" begin
+        @testset "Oracle separation: cache map omitted" begin
             # Endpoint 2 U, residual 4 U
             u1_fault = limiter_maps_step(; maps = (M_D, M_C, identity)).u1
             @test near(Y_next - u1_fault, 4.0)
             @test abs(u1_fault - Y_next) > tol
         end
 
-        @testset "Fault: cache map applied twice" begin
+        @testset "Oracle separation: cache map applied twice" begin
             # Hand value from the final maps: 1 -> 3 -> 2 -> 6 -> 10 U.
             # (M_C twice is idempotent and M_D twice is clipped by M_C, so the
             # cache map is the one whose double application is visible.)
