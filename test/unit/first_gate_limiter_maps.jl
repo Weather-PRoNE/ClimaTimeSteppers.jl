@@ -26,7 +26,7 @@ const Y_next = 6.0      # 1 -> 3 -> 2 -> 6
 # with |x| <= 10 U (largest value in any run, cache map applied twice). A
 # bound of 64 eps(10) ≈ 1.1e-13 U covers that and is 1e13 times smaller than
 # every fault shift below (>= 1 U). Provisional rounding-count rationale, not a
-# certified bound (D006): the number of roundings is estimated, not counted.
+# certified bound: the number of roundings is estimated, not counted.
 # For state type FT the same count applies with eps(FT(10)) (Float32:
 # 64 eps(10f0) ≈ 6.1e-5 U, still 1e4 times smaller than every fault shift).
 # Assertions with `==` are exact.
