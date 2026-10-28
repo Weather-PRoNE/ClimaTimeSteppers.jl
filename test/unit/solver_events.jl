@@ -388,6 +388,21 @@ end
     @test_throws ArgumentError CTS.init(
         prob, ExplicitAlgorithm(SSP33ShuOsher()); dt = 1.0, solver_observer = Recorder(),
     )
+    # Other families use the generic `supports_solver_events(alg) = false`
+    # fallback; the check runs before the cache is built.
+    for alg in (
+        LSRK54CarpenterKennedy(),
+        CTS.RosenbrockAlgorithm(CTS.tableau(SSPKnoth())),
+    )
+        @test !CTS.supports_solver_events(alg)
+        err = try
+            CTS.init(prob, alg; dt = 1.0, solver_observer = Recorder())
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("IMEX ARK only", sprint(showerror, err))
+    end
 
     for kwargs in ((;), (; solver_observer = nothing))
         integrator = CTS.init(prob, ssp; dt = 1.0, kwargs...)
