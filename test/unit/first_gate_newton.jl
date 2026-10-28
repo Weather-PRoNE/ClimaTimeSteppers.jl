@@ -16,12 +16,8 @@
 using ClimaTimeSteppers, Test
 import ClimaTimeSteppers as CTS
 
-# ARS343 constants (16 significant digits)
-const γ = 0.4358665215084590
-const b1 = 1.208496649176010
-const b2 = -0.644363170684469
+include("first_gate_constants.jl")
 const b_imp = (0.0, b1, b2, γ)
-const coeff_atol = 2e-15
 
 # Problem in numerical unit coordinates (U = 1, s = 1)
 f_imp(u) = -u^2
@@ -38,12 +34,13 @@ const D_expected = 1 // 144
 const T_eff_expected = -2 // 3
 const U_converged = -2 + 2√2
 
-# Tolerances. States are O(1 U): the Newton
-# step, dt = 1/(4γ) and dtγ each round within a few ulps of their O(1) values,
-# so 64 eps of the state scale |B| = 1 U bounds the state error with margin.
-# Tendencies are state differences divided by h = 1/4 s, which multiplies the
-# absolute error by 1/h = 4. Both are below 1/144 by about 11 orders.
-const tol_state = 64 * eps(Float64) * abs(B)
+# Tolerances: `provisional_tol` (provisional rounding-count rationale, not a
+# certified bound). States are O(1 U): the Newton step, dt = 1/(4γ) and dtγ
+# each round within a few ulps of their O(1) values, so 64 eps of the state
+# scale |B| = 1 U bounds the state error with margin. Tendencies are state
+# differences divided by h = 1/4 s, which multiplies the absolute error by
+# exactly 1/h = 4. Both are below 1/144 by about 11 orders.
+const tol_state = provisional_tol(B)
 const tol_tend = tol_state / h
 
 # One ARS343 step with a recording explicit tendency f_exp = 0. Returns the
@@ -112,7 +109,8 @@ end
         # Assembly: with f_exp = 0 the endpoint is u0 + dt Σ b_imp[j] T_imp[j]
         # (assembly in `step_u!`); b_imp[1] = 0. The stored tendencies
         # reproduce the solver endpoint ...
-        tol_u1 = 64 * eps(Float64) * (abs(u0) + dt * sum(abs, b_imp[2:4] .* T_imp_stored))
+        # `provisional_tol` of the sum of absolute terms
+        tol_u1 = provisional_tol(abs(u0) + dt * sum(abs, b_imp[2:4] .* T_imp_stored))
         u1_assembled = u0 + dt * sum(b_imp[2:4] .* T_imp_stored)
         @test abs(u1_assembled - u1) <= tol_u1
         # ... while T_physical in place of T_eff at stage 2 shifts it by

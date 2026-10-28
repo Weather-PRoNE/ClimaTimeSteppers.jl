@@ -9,20 +9,13 @@ import ClimaTimeSteppers as CTS
 # Helper to extract dense Float64 arrays from SparseCoeffs (as in tableaus.jl)
 dense(sc::CTS.SparseCoeffs) = Array(Float64.(sc.coeffs))
 
-# ARS343 constants (16 significant digits)
-const γ = 0.4358665215084590
-const b1 = 1.208496649176010
-const b2 = -0.644363170684469
-const a41 = -0.1058582960718796
-const α = 0.5529291480359398  # a42 = a43
-const coeff_atol = 2e-15
+include("first_gate_constants.jl")
 
 # Manufactured linear problem: f_exp(u, t) = 1, f_imp(u, t) = u / (2γ), u0 = 0,
 # one step with dt = 1. Stage by stage, U4 = 2H and u1 = 2H with
 # H = (a41 + 2α) + b1 + b2 / γ.
 const H = (a41 + 2α) + b1 + b2 / γ
 const u1_expected = 2H
-provisional_tol(x) = 64 * eps(Float64) * abs(x)
 
 function manufactured_endpoint(alg; T_exp! = (du, u, p, t) -> (du .= 1))
     # W = dtγ * J - I with J = 1 / (2γ)
@@ -183,7 +176,8 @@ end
             calls, T_exp_rec! = stage_recorder(t -> t)
             u1 = endpoint(ARS343(); T_exp! = T_exp_rec!)
             @test abs(u1 - u1_c2) <= tol
-            # Display-precision guard against the 8-digit hand value
+            # Display-precision guard against the 8-decimal hand value; the
+            # bound is the printed precision (rounding error <= 5e-9).
             @test abs(u1 - 0.62679059) <= 1e-8
 
             U3_obs = stage_values(calls, c3)

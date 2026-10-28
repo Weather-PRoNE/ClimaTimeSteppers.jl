@@ -23,7 +23,9 @@ const Y_next = 6.0      # 1 -> 3 -> 2 -> 6
 # exactly 1, so each weighted sum carries a few roundings of size eps(|x|)
 # with |x| <= 10 U (largest value in any run, cache map applied twice). A
 # bound of 64 eps(10) ≈ 1.1e-13 U covers that and is 1e13 times smaller than
-# every fault shift below (>= 1 U). Provisional, uncalibrated (D006).
+# every fault shift below (>= 1 U). Provisional rounding-count rationale, not a
+# certified bound (D006): the number of roundings is estimated, not counted.
+# Assertions with `==` are exact.
 const tol = 64 * eps(10.0)
 near(x, y) = abs(x - y) <= tol
 
