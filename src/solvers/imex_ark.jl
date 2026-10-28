@@ -432,10 +432,16 @@ Shared by the IMEX-ARK and IMEX-SSPRK stage loops; `ctx` is an
             cache_imp!, U, p, t_imp,
         )
         T_post = cache.T_imp[i]
-        emit(ctx, Operation, :post_imp_correction, :subordinate_stage_write, :entry, U, T_post)
+        emit(
+            ctx, Operation, :post_imp_correction, :subordinate_stage_write, :entry,
+            U, T_post,
+        )
         f.T_post_imp!(T_post, U, p, t_imp)
         @. U += dtγ * T_post
-        emit(ctx, Operation, :post_imp_correction, :subordinate_stage_write, :exit, U, T_post)
+        emit(
+            ctx, Operation, :post_imp_correction, :subordinate_stage_write, :exit,
+            U, T_post,
+        )
     end
 
     # Post-Newton: DSS the solved stage value. Fire `EndOfStageSignal` for

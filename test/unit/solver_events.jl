@@ -251,7 +251,9 @@ end
 end
 
 newton_arrays(nmc::Nothing) = AbstractArray[]
-newton_arrays(nmc) = AbstractArray[getfield(nmc, k) for k in propertynames(nmc) if getfield(nmc, k) isa AbstractArray]
+newton_arrays(nmc) = AbstractArray[
+    getfield(nmc, k) for k in propertynames(nmc) if getfield(nmc, k) isa AbstractArray
+]
 cache_arrays(c) = [
     c.U, c.temp, parent(c.T_exp)..., parent(c.T_lim)..., parent(c.T_imp)...,
     newton_arrays(c.newtons_method_cache)...,
@@ -273,7 +275,9 @@ end
     reference = first(runs)
     for integrator in runs
         @test same_bits(integrator.u, reference.u)
-        @test all(map(same_bits, cache_arrays(integrator.cache), cache_arrays(reference.cache)))
+        @test all(
+            map(same_bits, cache_arrays(integrator.cache), cache_arrays(reference.cache)),
+        )
     end
     @test length(newton_arrays(reference.cache.newtons_method_cache)) == 3  # Δx, f, j
     perturbed = one_step()
@@ -287,8 +291,10 @@ end
     c = warm_step_allocations(; solver_observer = Returns(nothing))
     d = warm_step_allocations(; solver_observer = Recorder())
     @test a == b
-    @info "warm step! allocations (bytes)" no_keyword = a nothing_observer = b noop_observer =
-        c recording_observer = d noop_delta = c - a
+    @info(
+        "warm step! allocations (bytes)", no_keyword = a, nothing_observer = b,
+        noop_observer = c, recording_observer = d, noop_delta = c - a,
+    )
     @test c == a
 end
 
@@ -312,7 +318,8 @@ end
     )
     @test map(tag, rec.log) == expected_trace(; newton_calls = 0)
     rec = Recorder()
-    integrator = one_step(; prob = make_prob(; initialize_imp! = nothing), solver_observer = rec)
+    integrator =
+        one_step(; prob = make_prob(; initialize_imp! = nothing), solver_observer = rec)
     @test map(tag, rec.log) == expected_trace(; newton_calls = 0, init_imp = false)
     @test integrator.u == base.u
 
@@ -324,7 +331,10 @@ end
     )
     @test map(tag, rec.log) == expected_trace(; newton_calls = 0)
     rec = Recorder()
-    one_step(; prob = make_prob(; update_cache = UpdateEvery(EndOfStep)), solver_observer = rec)
+    one_step(;
+        prob = make_prob(; update_cache = UpdateEvery(EndOfStep)),
+        solver_observer = rec,
+    )
     @test map(tag, rec.log) == expected_trace(; newton_calls = 0, cache_post = false)
 
     # update_constrain_state = UpdateEvery(WithDSS) fires at every stage site.
@@ -337,7 +347,10 @@ end
 
     # A limited tendency enables the stage and final limiter sites.
     rec = Recorder()
-    one_step(; prob = make_prob(; T_lim! = (du, u, p, t) -> (du .= 0)), solver_observer = rec)
+    one_step(;
+        prob = make_prob(; T_lim! = (du, u, p, t) -> (du .= 0)),
+        solver_observer = rec,
+    )
     @test map(tag, rec.log) == expected_trace(; newton_calls = 0, lim = true)
     lim_ops = filter(r -> r.kind === :Operation && r.data[:site] === :final_lim, rec.log)
     @test all(r -> r.data[:extra] isa AbstractArray, lim_ops)
@@ -384,7 +397,10 @@ end
 end
 
 @testset "explicit-only ARK (RK4) is supported and traced" begin
-    prob = ODEProblem(ClimaODEFunction(; T_exp! = (du, u, p, t) -> (du .= 1)), [0.0], (0.0, 10.0), nothing)
+    prob = ODEProblem(
+        ClimaODEFunction(; T_exp! = (du, u, p, t) -> (du .= 1)),
+        [0.0], (0.0, 10.0), nothing,
+    )
     rec = Recorder()
     integrator = CTS.init(prob, ExplicitAlgorithm(RK4()); dt = 1.0, solver_observer = rec)
     CTS.step!(integrator)
@@ -394,7 +410,9 @@ end
     @test length(events(log, :AssemblyInputs)) == 1
     @test isempty(events(log, :StageBaseline))
     @test isempty(events(log, :EffectiveStorage))
-    sites = [r.data[:site] for r in log if r.kind === :Operation && r.data[:phase] === :entry]
+    sites = [
+        r.data[:site] for r in log if r.kind === :Operation && r.data[:phase] === :entry
+    ]
     # no implicit stage: per stage i ≠ 1 the pre-DSS and, with the default
     # UpdateEvery(EndOfStage) cache policy, the no-implicit cache site; then the final maps
     @test count(==(:stage_dss_pre), sites) == 3
@@ -402,5 +420,10 @@ end
     @test count(==(:final_dss), sites) == 1
     @test count(==(:final_constrain), sites) == 1
     @test count(==(:final_cache), sites) == 1
-    @test isempty(filter(s -> s in (:init_imp, :cache_imp_pre_newton, :cache_imp_newton, :cache_imp_post_newton, :post_imp_correction, :stage_dss_post, :stage_cache_fallback, :stage_lim, :final_lim), sites))
+    absent = (
+        :init_imp, :cache_imp_pre_newton, :cache_imp_newton, :cache_imp_post_newton,
+        :post_imp_correction, :stage_dss_post, :stage_cache_fallback, :stage_lim,
+        :final_lim,
+    )
+    @test isempty(filter(s -> s in absent, sites))
 end
