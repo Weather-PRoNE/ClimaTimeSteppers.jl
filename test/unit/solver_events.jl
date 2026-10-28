@@ -289,6 +289,7 @@ end
     @test a == b
     @info "warm step! allocations (bytes)" no_keyword = a nothing_observer = b noop_observer =
         c recording_observer = d noop_delta = c - a
+    @test c == a
 end
 
 @testset "branch coverage" begin
