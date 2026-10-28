@@ -110,6 +110,35 @@ the step (`:stage_construction`, `:stage_processing`,
 `:subordinate_stage_write`, `:final_limiter`, `:final_map`). `state` is the
 array the hook acts on; `extra` is the limiter reference `u` for `lim!`, the
 scratch `T_imp[i]` for the `T_post_imp!` correction, and `nothing` otherwise.
+
+| `site`                       | `role`                     | hook               | `state` |
+|:-----------------------------|:---------------------------|:-------------------|:--------|
+| `:stage_lim`                 | `:stage_construction`      | `lim!`             | `U`     |
+| `:stage_dss_pre`             | `:stage_construction`      | `dss!`             | `U`     |
+| `:stage_constrain_pre`       | `:stage_construction`      | `constrain_state!` | `U`     |
+| `:stage_cache_no_implicit`   | `:stage_construction`      | `cache!`           | `U`     |
+| `:init_imp`                  | `:stage_processing`        | `initialize_imp!`  | `U`     |
+| `:stage_dss_post_init`       | `:stage_processing`        | `dss!`             | `U`     |
+| `:stage_constrain_post_init` | `:stage_processing`        | `constrain_state!` | `U`     |
+| `:cache_imp_pre_newton`      | `:subordinate_stage_write` | `cache_imp!`       | `U`     |
+| `:cache_imp_newton`          | `:subordinate_stage_write` | `cache_imp!`       | iterate |
+| `:cache_imp_post_newton`     | `:subordinate_stage_write` | `cache_imp!`       | `U`     |
+| `:post_imp_correction`       | `:subordinate_stage_write` | `T_post_imp!`      | `U`     |
+| `:stage_dss_post`            | `:stage_processing`        | `dss!`             | `U`     |
+| `:stage_constrain_post`      | `:stage_processing`        | `constrain_state!` | `U`     |
+| `:stage_cache_post`          | `:stage_processing`        | `cache!`           | `U`     |
+| `:stage_cache_fallback`      | `:subordinate_stage_write` | `cache_imp!`       | `U`     |
+| `:final_lim`                 | `:final_limiter`           | `lim!`             | `temp`  |
+| `:final_dss`                 | `:final_map`               | `dss!`             | `u`     |
+| `:final_constrain`           | `:final_map`               | `constrain_state!` | `u`     |
+| `:final_cache`               | `:final_map`               | `cache!`           | `u`     |
+
+`U` is the stage state, `u` the step's state, `temp` the final-limiter scratch, and
+"iterate" the Newton iterate passed to `cache_imp!` before each residual. `extra` is
+`u` at `:stage_lim` and `:final_lim`, `T_imp[i]` at `:post_imp_correction` (whose
+exit follows `U .+= dtγ .* T_imp[i]`), and `nothing` elsewhere. For
+`:post_imp_correction`, `extra = T_imp[i]` still holds an earlier value at
+`phase = :entry`; it holds the correction only at `phase = :exit`.
 """
 struct Operation{C, S, X}
     ctx::C
