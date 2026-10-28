@@ -17,17 +17,19 @@ include("first_gate_constants.jl")
 const H = (a41 + 2α) + b1 + b2 / γ
 const u1_expected = 2H
 
-function manufactured_endpoint(alg; T_exp! = (du, u, p, t) -> (du .= 1))
+# FT is the state type (state, time, step and Jacobian); the tableau stays
+# Float64 (default `cast_tableau_to_state_eltype = false`).
+function manufactured_endpoint(alg; T_exp! = (du, u, p, t) -> (du .= 1), FT = Float64)
     # W = dtγ * J - I with J = 1 / (2γ)
     Wfact!(W, u, p, dtγ, t) = (W[1, 1] = dtγ / (2γ) - 1)
     T_imp = CTS.ODEFunction(
         (du, u, p, t) -> (du .= u ./ (2γ));
-        jac_prototype = zeros(1, 1),
+        jac_prototype = zeros(FT, 1, 1),
         Wfact = Wfact!,
     )
     f = ClimaODEFunction(; T_exp!, T_imp! = T_imp)
-    prob = CTS.ODEProblem(f, [0.0], (0.0, 1.0), nothing)
-    sol = CTS.solve(prob, alg; dt = 1.0, saveat = (1.0,))
+    prob = CTS.ODEProblem(f, [zero(FT)], (zero(FT), one(FT)), nothing)
+    sol = CTS.solve(prob, alg; dt = one(FT), saveat = (one(FT),))
     return sol.u[end][1]
 end
 
@@ -42,7 +44,7 @@ end
 
 # Stage times come from row sums, so match them to c within coefficient
 # tolerance rather than exactly.
-stage_values(calls, c) = [u for (t, u) in calls if abs(t - c) <= coeff_atol]
+stage_values(calls, c; atol = coeff_atol) = [u for (t, u) in calls if abs(t - c) <= atol]
 
 # Harness copy of the ARS343 tableau, built through the public keyword
 # constructor; `modify!` may change entries of the copied coefficient arrays.
@@ -121,15 +123,18 @@ end
         @test abs(γ - r1) > 0.2 && abs(γ - r3) > 1.9
     end
 
-    @testset "Manufactured linear implicit problem" begin
-        tol = provisional_tol(u1_expected)
-        u1 = manufactured_endpoint(IMEXAlgorithm(ARS343(), NewtonsMethod(; max_iters = 2)))
-        @test abs(u1 - u1_expected) <= tol
+    # Float32 state with the Float64 tableau, and Float64 throughout; the
+    # Float64 expected value is converted to FT before comparison.
+    @testset "Manufactured linear implicit problem ($FT)" for FT in (Float32, Float64)
+        tol = provisional_tol(u1_expected, FT)
+        alg(n) = IMEXAlgorithm(ARS343(), NewtonsMethod(; max_iters = n))
+        u1 = manufactured_endpoint(alg(2); FT)
+        @test u1 isa FT
+        @test abs(u1 - FT(u1_expected)) <= tol
 
         # The problem is linear, so a single Newton iteration is exact.
-        u1_one_iter =
-            manufactured_endpoint(IMEXAlgorithm(ARS343(), NewtonsMethod(; max_iters = 1)))
-        @test abs(u1_one_iter - u1_expected) <= tol
+        u1_one_iter = manufactured_endpoint(alg(1); FT)
+        @test abs(u1_one_iter - FT(u1_expected)) <= tol
         @test abs(u1_one_iter - u1) <= tol
     end
 
@@ -201,21 +206,27 @@ end
             @test abs(a_exp[3, 1] - (c3 - p)) <= coeff_atol
         end
 
-        @testset "Endpoint" begin
+        # Float32 state with the Float64 tableau, and Float64 throughout; the
+        # Float64 expected values are converted to FT before comparison.
+        @testset "Endpoint ($FT)" for FT in (Float32, Float64)
             # Stage values observed through the explicit tendency
             calls, T_exp_rec! = stage_recorder(t -> t)
-            u1 = endpoint(ARS343(); T_exp! = T_exp_rec!)
-            @test abs(u1 - u1_c2) <= tol
-            # Display-precision guard against the 8-decimal hand value; the
-            # bound is the printed precision (rounding error <= 5e-9).
-            @test abs(u1 - 0.62679059) <= 1e-8
+            u1 = endpoint(ARS343(); T_exp! = T_exp_rec!, FT)
+            @test u1 isa FT
+            @test abs(u1 - FT(u1_c2)) <= provisional_tol(u1_c2, FT)
+            if FT == Float64
+                # Display-precision guard against the 8-decimal hand value; the
+                # bound is the printed precision (rounding error <= 5e-9).
+                @test abs(u1 - 0.62679059) <= 1e-8
+            end
 
-            U3_obs = stage_values(calls, c3)
-            U4_obs = stage_values(calls, 1)
+            # Recorded stage values are FT values widened to Float64.
+            U3_obs = stage_values(calls, c3; atol = stage_atol(FT))
+            U4_obs = stage_values(calls, 1; atol = stage_atol(FT))
             @test !isempty(U3_obs) &&
-                  all(u -> abs(u - U3_c2) <= provisional_tol(U3_c2), U3_obs)
+                  all(u -> abs(u - FT(U3_c2)) <= provisional_tol(U3_c2, FT), U3_obs)
             @test !isempty(U4_obs) &&
-                  all(u -> abs(u - U4_c2) <= provisional_tol(U4_c2), U4_obs)
+                  all(u -> abs(u - FT(U4_c2)) <= provisional_tol(U4_c2, FT), U4_obs)
         end
 
         @testset "Swap control: a_exp[3, 1] <-> a_exp[3, 2]" begin

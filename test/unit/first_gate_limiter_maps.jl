@@ -7,15 +7,17 @@ import ClimaTimeSteppers as CTS
 
 # Limited-channel setup: u0 = 2 U, dt = 1 s, T_lim = 4, T_exp = -2, T_imp = 0,
 # L(x) = min(x, 3). Constant tendencies, so stage values cannot change them.
+# The state type FT is Float32 or Float64; the tableau stays Float64 (default
+# `cast_tableau_to_state_eltype = false`). All oracle values are exact in both.
 const u0 = 2.0
 const u_raw = 6.0       # u0 + Σ b_exp T_lim dt = 2 + 4 (Σ b_exp = 1)
 const u_limited = 3.0   # L(u_raw)
 const Y_asm = 1.0       # u_limited + Σ b_exp T_exp dt = 3 - 2
-L(x) = min(x, 3.0)
+L(x) = min(x, oftype(x, 3))
 
 # Final maps, applied after assembly as M_K ∘ M_C ∘ M_D.
 M_D(x) = 2x + 1
-M_C(x) = min(x, 2.0)
+M_C(x) = min(x, oftype(x, 2))
 M_K(x) = x + 4
 const Y_next = 6.0      # 1 -> 3 -> 2 -> 6
 
@@ -25,9 +27,10 @@ const Y_next = 6.0      # 1 -> 3 -> 2 -> 6
 # bound of 64 eps(10) ≈ 1.1e-13 U covers that and is 1e13 times smaller than
 # every fault shift below (>= 1 U). Provisional rounding-count rationale, not a
 # certified bound (D006): the number of roundings is estimated, not counted.
+# For state type FT the same count applies with eps(FT(10)) (Float32:
+# 64 eps(10f0) ≈ 6.1e-5 U, still 1e4 times smaller than every fault shift).
 # Assertions with `==` are exact.
-const tol = 64 * eps(10.0)
-near(x, y) = abs(x - y) <= tol
+lim_tol(FT) = 64 * eps(FT(10))
 
 # Map hook that records every call and mutates only the integrator state, so
 # the stage buffers and the init-time `cache!(u0)` call stay untouched; the
@@ -45,11 +48,13 @@ end
 # One ARS343 step of the limited-channel split problem. `lim` is the limiter body,
 # `maps` the scalar maps run by (dss!, constrain_state!, cache!).
 function limiter_maps_step(;
+    FT = Float64,
     lim = L,
     T_lim = 4.0,
     T_exp = -2.0,
     maps = (identity, identity, identity),
 )
+    T_lim, T_exp = FT(T_lim), FT(T_exp)
     trace = Tuple{Symbol, Float64, Float64, Float64}[]
     lim_calls = Tuple{Float64, Float64, Float64, Float64, Bool}[]
     target = Ref{Any}(nothing)
@@ -63,7 +68,7 @@ function limiter_maps_step(;
     # T_imp = 0 with W = dtγ * 0 - I
     T_imp = CTS.ODEFunction(
         (du, u, p, t) -> (du .= 0);
-        jac_prototype = zeros(1, 1),
+        jac_prototype = zeros(FT, 1, 1),
         Wfact = (W, u, p, dtγ, t) -> (W[1, 1] = -1),
     )
     f = ClimaODEFunction(;
@@ -75,19 +80,23 @@ function limiter_maps_step(;
         constrain_state! = map_hook(:constrain_state!, maps[2], trace, target),
         cache! = map_hook(:cache!, maps[3], trace, target),
     )
-    prob = CTS.ODEProblem(f, [u0], (0.0, 1.0), nothing)
+    prob = CTS.ODEProblem(f, [FT(u0)], (zero(FT), one(FT)), nothing)
     alg = IMEXAlgorithm(ARS343(), NewtonsMethod(; max_iters = 2))
-    integrator = CTS.init(prob, alg; dt = 1.0, saveat = (1.0,))
+    integrator = CTS.init(prob, alg; dt = one(FT), saveat = (one(FT),))
     target[] = integrator.u
     temp[] = integrator.cache.temp
     CTS.solve!(integrator)
     return (; u1 = integrator.u[1], trace, lim_calls)
 end
 
-@testset "First-gate limiter and final maps" begin
+@testset "First-gate limiter and final maps ($FT)" for FT in (Float32, Float64)
+    tol = lim_tol(FT)
+    near(x, y) = abs(x - y) <= tol
+    run_step(; kwargs...) = limiter_maps_step(; FT, kwargs...)
 
     @testset "Applied limited channel" begin
-        (; u1, trace, lim_calls) = limiter_maps_step()
+        (; u1, trace, lim_calls) = run_step()
+        @test u1 isa FT
         @test near(u1, Y_asm)
         # Identity maps: each end-of-step map runs once and changes nothing.
         @test first.(trace) == [:dss!, :constrain_state!, :cache!]
@@ -108,7 +117,7 @@ end
         # move the endpoint away from the oracle by the predicted amount.
         @testset "Oracle separation: limiter skipped" begin
             # Raw contribution 4 instead of applied 1: endpoint 4 U, residual -3 U.
-            u1_fault = limiter_maps_step(; lim = identity).u1
+            u1_fault = run_step(; lim = identity).u1
             @test near(u1_fault - Y_asm, 3.0)
             @test abs(u1_fault - Y_asm) > tol
         end
@@ -116,7 +125,7 @@ end
         @testset "Oracle separation: limit after unlimited increments" begin
             # Unlimited tendency moved into the limited channel:
             # min(2 + 4 - 2, 3) = 3 U instead of 1 U.
-            u1_fault = limiter_maps_step(; T_lim = 4.0 - 2.0, T_exp = 0.0).u1
+            u1_fault = run_step(; T_lim = 4.0 - 2.0, T_exp = 0.0).u1
             @test near(u1_fault - Y_asm, 2.0)
             @test abs(u1_fault - Y_asm) > tol
         end
@@ -125,7 +134,7 @@ end
     # Final maps, starting from Y_asm = 1 U
     @testset "Final maps and ordering" begin
         golden_maps = (M_D, M_C, M_K)
-        (; u1, trace) = limiter_maps_step(; maps = golden_maps)
+        (; u1, trace) = run_step(; maps = golden_maps)
         @test near(u1, Y_next)
         @test near(u1 - Y_asm, 5.0)  # total final-map change
 
@@ -142,14 +151,14 @@ end
         # Oracle separation: changed map inputs (not solver mutations).
         @testset "Oracle separation: first two maps swapped" begin
             # 1 -> 1 -> 3 -> 7 U
-            u1_fault = limiter_maps_step(; maps = (M_C, M_D, M_K)).u1
+            u1_fault = run_step(; maps = (M_C, M_D, M_K)).u1
             @test near(u1_fault - Y_next, 1.0)
             @test abs(u1_fault - Y_next) > tol
         end
 
         @testset "Oracle separation: cache map omitted" begin
             # Endpoint 2 U, residual 4 U
-            u1_fault = limiter_maps_step(; maps = (M_D, M_C, identity)).u1
+            u1_fault = run_step(; maps = (M_D, M_C, identity)).u1
             @test near(Y_next - u1_fault, 4.0)
             @test abs(u1_fault - Y_next) > tol
         end
@@ -158,7 +167,7 @@ end
             # Hand value from the final maps: 1 -> 3 -> 2 -> 6 -> 10 U.
             # (M_C twice is idempotent and M_D twice is clipped by M_C, so the
             # cache map is the one whose double application is visible.)
-            u1_fault = limiter_maps_step(; maps = (M_D, M_C, M_K ∘ M_K)).u1
+            u1_fault = run_step(; maps = (M_D, M_C, M_K ∘ M_K)).u1
             @test near(u1_fault - Y_next, 4.0)
             @test abs(u1_fault - Y_next) > tol
         end
