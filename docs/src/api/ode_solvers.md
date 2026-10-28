@@ -81,6 +81,20 @@ IMEXAlgorithm
 is_fsal
 ```
 
+### Solver events
+
+Events passed to the `solver_observer` keyword of `init` for IMEX ARK
+algorithms.
+
+```@docs
+EventContext
+StepStart
+StageBaseline
+EffectiveStorage
+AssemblyInputs
+Operation
+```
+
 ### ARS family ([ARS1997](@cite))
 ```@docs
 ARS111
