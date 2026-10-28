@@ -1,0 +1,175 @@
+# First-gate checks of the applied limited channel and the end-of-step final
+# maps (order and single application). Expected values are exact integers typed
+# in here, never taken from the solver. White-box: identifies the endpoint
+# limiter call by `u === integrator.cache.temp` (`IMEXARKCache` scratch buffer).
+using ClimaTimeSteppers, Test
+import ClimaTimeSteppers as CTS
+
+# Limited-channel setup: u0 = 2 U, dt = 1 s, T_lim = 4, T_exp = -2, T_imp = 0,
+# L(x) = min(x, 3). Constant tendencies, so stage values cannot change them.
+# The state type FT is Float32 or Float64; the tableau stays Float64 (default
+# `cast_tableau_to_state_eltype = false`). All oracle values are exact in both.
+const u0 = 2.0
+const u_raw = 6.0       # u0 + Σ b_exp T_lim dt = 2 + 4 (Σ b_exp = 1)
+const u_limited = 3.0   # L(u_raw)
+const Y_asm = 1.0       # u_limited + Σ b_exp T_exp dt = 3 - 2
+L(x) = min(x, oftype(x, 3))
+
+# Final maps, applied after assembly as M_K ∘ M_C ∘ M_D.
+M_D(x) = 2x + 1
+M_C(x) = min(x, oftype(x, 2))
+M_K(x) = x + 4
+const Y_next = 6.0      # 1 -> 3 -> 2 -> 6
+
+# The oracle is exact, but the solver's binary ARS343 weights need not sum to
+# exactly 1, so each weighted sum carries a few roundings of size eps(|x|)
+# with |x| <= 10 U (largest value in any run, cache map applied twice). A
+# bound of 64 eps(10) ≈ 1.1e-13 U covers that and is 1e13 times smaller than
+# every fault shift below (>= 1 U). Provisional rounding-count rationale, not a
+# certified bound: the number of roundings is estimated, not counted.
+# For state type FT the same count applies with eps(FT(10)) (Float32:
+# 64 eps(10f0) ≈ 6.1e-5 U, still 1e4 times smaller than every fault shift).
+# Assertions with `==` are exact.
+lim_tol(FT) = 64 * eps(FT(10))
+
+# Map hook that records every call and mutates only the integrator state, so
+# the stage buffers and the init-time `cache!(u0)` call stay untouched; the
+# recorded calls on the integrator state are the end-of-step final maps.
+function map_hook(name, M, trace, target)
+    return (u, p, t) -> begin
+        u === target[] || return nothing
+        before = u[1]
+        u .= M.(u)
+        push!(trace, (name, t, before, u[1]))
+        return nothing
+    end
+end
+
+# One ARS343 step of the limited-channel split problem. `lim` is the limiter body,
+# `maps` the scalar maps run by (dss!, constrain_state!, cache!).
+function limiter_maps_step(;
+    FT = Float64,
+    lim = L,
+    T_lim = 4.0,
+    T_exp = -2.0,
+    maps = (identity, identity, identity),
+)
+    T_lim, T_exp = FT(T_lim), FT(T_exp)
+    trace = Tuple{Symbol, Float64, Float64, Float64}[]
+    lim_calls = Tuple{Float64, Float64, Float64, Float64, Bool}[]
+    target = Ref{Any}(nothing)
+    temp = Ref{Any}(nothing)
+    lim! = (u, p, t, u_ref) -> begin
+        before = u[1]
+        u .= lim.(u)
+        push!(lim_calls, (t, before, u[1], u_ref[1], u === temp[]))
+        return nothing
+    end
+    # T_imp = 0 with W = dtγ * 0 - I
+    T_imp = CTS.ODEFunction(
+        (du, u, p, t) -> (du .= 0);
+        jac_prototype = zeros(FT, 1, 1),
+        Wfact = (W, u, p, dtγ, t) -> (W[1, 1] = -1),
+    )
+    f = ClimaODEFunction(;
+        T_exp! = (du, u, p, t) -> (du .= T_exp),
+        T_lim! = (du, u, p, t) -> (du .= T_lim),
+        T_imp! = T_imp,
+        lim!,
+        dss! = map_hook(:dss!, maps[1], trace, target),
+        constrain_state! = map_hook(:constrain_state!, maps[2], trace, target),
+        cache! = map_hook(:cache!, maps[3], trace, target),
+    )
+    prob = CTS.ODEProblem(f, [FT(u0)], (zero(FT), one(FT)), nothing)
+    alg = IMEXAlgorithm(ARS343(), NewtonsMethod(; max_iters = 2))
+    integrator = CTS.init(prob, alg; dt = one(FT), saveat = (one(FT),))
+    target[] = integrator.u
+    temp[] = integrator.cache.temp
+    CTS.solve!(integrator)
+    return (; u1 = integrator.u[1], trace, lim_calls)
+end
+
+@testset "First-gate limiter and final maps ($FT)" for FT in (Float32, Float64)
+    tol = lim_tol(FT)
+    near(x, y) = abs(x - y) <= tol
+    run_step(; kwargs...) = limiter_maps_step(; FT, kwargs...)
+
+    @testset "Applied limited channel" begin
+        (; u1, trace, lim_calls) = run_step()
+        @test u1 isa FT
+        @test near(u1, Y_asm)
+        # Identity maps: each end-of-step map runs once and changes nothing.
+        @test first.(trace) == [:dss!, :constrain_state!, :cache!]
+        @test all(((_, _, b, a),) -> b == a, trace)
+
+        # The endpoint limiter runs once (one solver-side application), on the
+        # raw intermediate in the scratch buffer, relative to u0: 6 -> 3.
+        endpoint_calls = filter(c -> c[5], lim_calls)
+        @test length(endpoint_calls) == 1
+        (t, before, after, u_ref, _) = only(endpoint_calls)
+        @test t == 1.0 && u_ref == u0
+        @test near(before, u_raw)
+        @test after == u_limited             # L clips to exactly 3
+        @test near(after - u_ref, 1.0)       # ΔY_lim,applied
+        @test near(u1 - after, -2.0)         # unlimited explicit contribution
+
+        # Oracle separation: changed problem inputs (not solver mutations)
+        # move the endpoint away from the oracle by the predicted amount.
+        @testset "Oracle separation: limiter skipped" begin
+            # Raw contribution 4 instead of applied 1: endpoint 4 U, residual -3 U.
+            u1_fault = run_step(; lim = identity).u1
+            @test near(u1_fault - Y_asm, 3.0)
+            @test abs(u1_fault - Y_asm) > tol
+        end
+
+        @testset "Oracle separation: limit after unlimited increments" begin
+            # Unlimited tendency moved into the limited channel:
+            # min(2 + 4 - 2, 3) = 3 U instead of 1 U.
+            u1_fault = run_step(; T_lim = 4.0 - 2.0, T_exp = 0.0).u1
+            @test near(u1_fault - Y_asm, 2.0)
+            @test abs(u1_fault - Y_asm) > tol
+        end
+    end
+
+    # Final maps, starting from Y_asm = 1 U
+    @testset "Final maps and ordering" begin
+        golden_maps = (M_D, M_C, M_K)
+        (; u1, trace) = run_step(; maps = golden_maps)
+        @test near(u1, Y_next)
+        @test near(u1 - Y_asm, 5.0)  # total final-map change
+
+        # Each map acts once, in the order dss!, constrain_state!, cache!, at
+        # t_final, with the before/after trace 1 -> 3 -> 2 -> 6.
+        @test [(n, t) for (n, t, _, _) in trace] ==
+              [(:dss!, 1.0), (:constrain_state!, 1.0), (:cache!, 1.0)]
+        befores = [b for (_, _, b, _) in trace]
+        afters = [a for (_, _, _, a) in trace]
+        @test all(near.(befores, [1.0, 3.0, 2.0]))
+        @test all(near.(afters, [3.0, 2.0, 6.0]))
+        @test all(near.(afters .- befores, [2.0, -1.0, 4.0]))
+
+        # Oracle separation: changed map inputs (not solver mutations).
+        @testset "Oracle separation: first two maps swapped" begin
+            # 1 -> 1 -> 3 -> 7 U
+            u1_fault = run_step(; maps = (M_C, M_D, M_K)).u1
+            @test near(u1_fault - Y_next, 1.0)
+            @test abs(u1_fault - Y_next) > tol
+        end
+
+        @testset "Oracle separation: cache map omitted" begin
+            # Endpoint 2 U, residual 4 U
+            u1_fault = run_step(; maps = (M_D, M_C, identity)).u1
+            @test near(Y_next - u1_fault, 4.0)
+            @test abs(u1_fault - Y_next) > tol
+        end
+
+        @testset "Oracle separation: cache map applied twice" begin
+            # Hand value from the final maps: 1 -> 3 -> 2 -> 6 -> 10 U.
+            # (M_C twice is idempotent and M_D twice is clipped by M_C, so the
+            # cache map is the one whose double application is visible.)
+            u1_fault = run_step(; maps = (M_D, M_C, M_K ∘ M_K)).u1
+            @test near(u1_fault - Y_next, 4.0)
+            @test abs(u1_fault - Y_next) > tol
+        end
+    end
+end
