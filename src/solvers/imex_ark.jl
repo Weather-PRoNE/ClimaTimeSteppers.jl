@@ -34,7 +34,7 @@ constructed.
 Tendency evaluations (`T_exp_T_lim!`, and `T_imp!` on stages with a zero
 implicit diagonal) emit no events of their own. Their values are captured at
 assembly time, in the `T_exp`, `T_lim` and `T_imp` of [`AssemblyInputs`](@ref),
-which suffices for first-gate channel accounting.
+which is sufficient to attribute the final assembly to its tendency channels.
 """
 struct EventContext{O, T, DT, DTG, TE, TI}
     observer::O
@@ -274,7 +274,11 @@ function step_u!(integrator, cache::IMEXARKCache)
     # unconditionally. `EndOfStep <: EndOfStage <: WithDSS`, so all three
     # handler families see it. For FSAL tableaux the redundant post-Newton
     # firing at end of stage `s` is skipped inside `solve_stage_implicit!`
-    # (since `u ≡ U_s`), so no double firing occurs.
+    # (since `u ≡ U_s`), so no double firing occurs. The FSAL skip applies
+    # only after the Newton solve: a last stage with a zero implicit diagonal
+    # still calls `cache!` at the top of the stage (`stage_cache_no_implicit`),
+    # so on such tableaus (e.g. the IMKG family) `cache!` runs on `U_s` and
+    # again at the end of the step on `u`.
     op!(ctx, :final_dss, :final_map, u, nothing, dss!, u, p, t_final)
     needs_update!(f.update_constrain_state, EndOfStepSignal()) &&
         op!(ctx, :final_constrain, :final_map, u, nothing, constrain_state!, u, p, t_final)

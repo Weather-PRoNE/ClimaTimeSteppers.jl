@@ -55,6 +55,10 @@ The IMEX-ARK integrator uses this trait to skip the post-Newton
 `cache!` / `constrain_state!` firing at end of stage `s` for FSAL
 tableaux: since `u ≡ U_s` at end of step, the end-of-step firing
 (`EndOfStepSignal`) subsumes the redundant end-of-stage-`s` call.
+The FSAL skip applies only after the Newton solve: a last stage with a
+zero implicit diagonal still calls `cache!` at the top of the stage
+(`stage_cache_no_implicit`), so on such tableaus (e.g. the IMKG family)
+`cache!` runs on `U_s` and again at the end of the step on `u`.
 """
 is_fsal(tableau::IMEXTableau) =
     tableau.b_exp.coeffs == tableau.a_exp.coeffs[end, :] &&
