@@ -30,6 +30,11 @@ across stages and by the final assembly.
 Solver events are implemented for IMEX ARK (`IMEXAlgorithm{Unconstrained}`)
 only. With `solver_observer = nothing` (the default) no context or event is
 constructed.
+
+Tendency evaluations (`T_exp_T_lim!`, and `T_imp!` on stages with a zero
+implicit diagonal) emit no events of their own. Their values are captured at
+assembly time, in the `T_exp`, `T_lim` and `T_imp` of [`AssemblyInputs`](@ref),
+which suffices for first-gate channel accounting.
 """
 struct EventContext{O, T, DT, DTG, TE, TI}
     observer::O
