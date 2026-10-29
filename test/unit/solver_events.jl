@@ -442,3 +442,140 @@ end
     )
     @test isempty(filter(s -> s in absent, sites))
 end
+
+# Linear problem `du/dt = 1 - u`: explicit part `1`, implicit part `-u`.
+function linear_prob(; u0 = [0.5])
+    ODEProblem(
+        ClimaODEFunction(;
+            T_exp! = (du, u, p, t) -> (du .= 1),
+            T_imp! = ODEFunction(
+                (du, u, p, t) -> (du .= .-u);
+                jac_prototype = zeros(1, 1),
+                # Newton expects W = dtγ J - I with J = -1.
+                Wfact = (W, u, p, dtγ, t) -> (W .= -dtγ - 1),
+            ),
+        ),
+        u0, (0.0, 10.0), nothing,
+    )
+end
+
+# One ARK step of the linear problem from the tableau, each implicit stage
+# solved in closed form; returns the endpoint and the stage values.
+function reference_step(tab, u, dt)
+    ae, ai = tab.a_exp.coeffs, tab.a_imp.coeffs
+    be, bi = tab.b_exp.coeffs, tab.b_imp.coeffs
+    s = length(be)
+    U = zeros(s)
+    for i in 1:s
+        prev = 1:(i - 1)
+        rhs = u + dt * sum(ae[i, j] for j in prev; init = 0.0) -
+              dt * sum(ai[i, j] * U[j] for j in prev; init = 0.0)
+        U[i] = rhs / (1 + dt * ai[i, i])
+    end
+    return u + dt * sum(be) - dt * sum(bi .* U), U
+end
+
+# Event sequence of one step from the stage loop in src/solvers/imex_ark.jl,
+# for the default hooks (wired `initialize_imp!`, cache at EndOfStage,
+# constraint at EndOfStep), no limiter and Newton with `max_iters = 1`. A
+# stage with a zero implicit diagonal runs no solve; its `T_imp!` evaluation,
+# if the tableau uses it, emits no event.
+function expected_step_trace(tab)
+    a = tab.a_imp.coeffs
+    s = size(a, 1)
+    seq = Any[:StepStart]
+    op(site) = push!(seq, (site, :entry), (site, :exit))
+    for i in 1:s
+        i ≠ 1 && op(:stage_dss_pre)
+        if iszero(a[i, i])
+            i ≠ 1 && op(:stage_cache_no_implicit)
+            continue
+        end
+        push!(seq, :StageBaseline)
+        op(:init_imp)
+        op(:stage_dss_post_init)
+        op(:cache_imp_pre_newton)
+        op(:stage_dss_post)
+        (i == s && is_fsal(tab)) || op(:stage_cache_post)
+        push!(seq, :EffectiveStorage)
+    end
+    push!(seq, :AssemblyInputs)
+    op(:final_dss)
+    op(:final_constrain)
+    op(:final_cache)
+    return seq
+end
+
+# Two observed steps of the linear problem with `name`'s tableau. Checks that
+# each step emits the expected sequence and that the state matches the
+# closed-form reference; returns the log, the integrator and the stage values.
+function check_two_steps(name)
+    tab = CTS.IMEXTableau(name)
+    rec = Recorder()
+    alg = IMEXAlgorithm(name, NewtonsMethod(; max_iters = 1))
+    integrator = CTS.init(linear_prob(), alg; dt = 1.0, solver_observer = rec)
+    u_ref = integrator.u[1]
+    stages = Vector{Float64}[]
+    for n in 1:2
+        @test (CTS.step!(integrator); true)
+        u_ref, U = reference_step(tab, u_ref, 1.0)
+        push!(stages, U)
+        @test isapprox(integrator.u[1], u_ref; rtol = 1e-12)
+    end
+    for n in 1:2
+        step_log = filter(r -> r.step == n, rec.log)
+        @test map(tag, step_log) == expected_step_trace(tab)
+        @test all(r -> r.t == n - 1 && r.dt == 1, step_log)
+    end
+    @test length(rec.log) == 2 * length(expected_step_trace(tab))
+    for r in events(rec.log, :Operation)
+        @test r.data[:role] === ROLES[r.data[:site]]
+    end
+    return rec.log, integrator, stages
+end
+
+@testset "FSAL tableau (ARS222)" begin
+    @test is_fsal(CTS.IMEXTableau(ARS222()))
+    log, integrator, _ = check_two_steps(ARS222())
+    step1 = filter(r -> r.step == 1, log)
+    @test [r.stage for r in events(step1, :StageBaseline)] == [2, 3]
+    @test [r.data[:i] for r in events(step1, :EffectiveStorage)] == [2, 3]
+    entries = filter(r -> r.kind === :Operation && r.data[:phase] === :entry, step1)
+    sites(i) = [r.data[:site] for r in entries if r.stage == i]
+    # The last stage skips its post-solve cache!; the end-of-step map covers it.
+    @test :stage_cache_post in sites(2)
+    @test !(:stage_cache_post in sites(3)) && !(:stage_cache_fallback in sites(3))
+    @test :stage_dss_post in sites(3)
+    @test integrator.cache.γ == 1 - √2 / 2
+end
+
+@testset "non-SDIRK implicit tableau (IMKG254a)" begin
+    log, integrator, _ = check_two_steps(IMKG254a())
+    @test integrator.cache.γ === nothing
+    step1 = filter(r -> r.step == 1, log)
+    baselines = events(step1, :StageBaseline)
+    @test [r.stage for r in baselines] == [2, 3, 4, 5]
+    @test [r.dtγ for r in baselines] == [-1 / 2, 1, 1, 2]
+    @test [r.data[:dtγ] for r in events(step1, :EffectiveStorage)] == [-1 / 2, 1, 1, 2]
+end
+
+@testset "zero implicit diagonal in a used stage (IMKG342a)" begin
+    tab = CTS.IMEXTableau(IMKG342a())
+    a = tab.a_imp.coeffs
+    @test iszero(a[2, 2]) && !iszero(a[3, 2])
+    log, integrator, stages = check_two_steps(IMKG342a())
+    step1 = filter(r -> r.step == 1, log)
+    @test [r.stage for r in events(step1, :StageBaseline)] == [3, 4]
+    @test [r.data[:i] for r in events(step1, :EffectiveStorage)] == [3, 4]
+    stage2 = filter(r -> r.stage == 2, step1)
+    @test map(tag, stage2) == [
+        (:stage_dss_pre, :entry), (:stage_dss_pre, :exit),
+        (:stage_cache_no_implicit, :entry), (:stage_cache_no_implicit, :exit),
+    ]
+    @test all(r -> r.dtγ == 0, stage2)
+    # The explicit T_imp! value of stage 2 is visible at assembly.
+    T_imp = only(events(step1, :AssemblyInputs)).data[:T_imp]
+    U = first(stages)
+    @test isapprox(T_imp[2][1], -U[2]; rtol = 1e-12)
+    @test T_imp[1][1] == -U[1]
+end
